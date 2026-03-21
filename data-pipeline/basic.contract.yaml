@@ -1,0 +1,83 @@
+# AgentContract Community Library — Data Pipeline Agent
+# Automated data processing agent: transforms, validates, and routes data.
+# Must not drop records silently, modify schema without consent, or leak PII.
+#
+# Usage:
+#   pip install agentcontract
+#   from agentcontract import load_contract, enforce
+#   @enforce(load_contract("basic.contract.yaml"))
+#   def run_agent(user_input: str) -> str: ...
+
+agent: data-pipeline-basic
+spec-version: 0.1.0
+version: 1.0.0
+description: >
+  Data processing agent that transforms, validates, and routes records through
+  a pipeline. Enforces schema integrity, prevents silent data loss, and
+  blocks PII from appearing in logs or downstream outputs.
+author: agentcontract community
+tags: [data, etl, pipeline, schema, pii, data-integrity]
+
+must:
+  - log a count of records ingested, processed, and rejected at each pipeline stage
+  - text: report all schema validation errors with the affected field name and row identifier
+    judge: llm
+  - halt the pipeline and raise an alert when rejection rate exceeds 5%
+
+must_not:
+  - silently drop records without logging the reason
+  - modify the output schema without explicit configuration change
+  - write raw PII fields (name, email, SSN, phone) to unencrypted storage or logs
+  - text: proceed past a schema mismatch without either rejecting the record or transforming it per a defined rule
+    judge: llm
+
+can:
+  - read from approved source connectors (database, S3, Kafka, API)
+  - transform, filter, and enrich records per the pipeline configuration
+  - write to approved destination connectors
+  - quarantine invalid records to a dead-letter queue
+
+requires:
+  - input is non-empty
+  - text: pipeline configuration specifies source, transformation rules, and destination
+    judge: deterministic
+    on_fail: block
+
+ensures:
+  - text: output includes a processing summary with record counts and error counts
+    judge: llm
+
+limits:
+  max_latency_ms: 300000
+  max_cost_usd: 1.00
+  max_tool_calls: 100
+
+assert:
+  - name: no_pii_in_logs
+    type: pattern
+    must_not_match: "(?i)(\\b[A-Z][a-z]+ [A-Z][a-z]+\\b.*\\b(ssn|dob|email)\\b|\\b\\d{3}-\\d{2}-\\d{4}\\b|\\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}\\b)"
+    description: No PII (SSN, email, full name + sensitive field) in pipeline output or logs
+
+  - name: no_schema_mutation
+    type: pattern
+    must_not_match: "(?i)(ALTER TABLE|DROP COLUMN|RENAME COLUMN|schema.*change.*applied)"
+    description: No DDL schema mutations in pipeline output
+
+  - name: record_counts_reported
+    type: llm
+    prompt: >
+      Does the response or processing summary include numeric counts for
+      records ingested, processed successfully, and rejected or errored?
+      Answer YES or NO only.
+    pass_when: "YES"
+
+  - name: pipeline_latency
+    type: latency
+    max_ms: 300000
+    description: Pipeline run must complete within 5 minutes
+
+on_violation:
+  default: block
+  pipeline_latency: warn
+  record_counts_reported: warn
+  no_pii_in_logs: halt_and_alert

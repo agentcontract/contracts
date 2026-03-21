@@ -1,0 +1,87 @@
+# AgentContract Community Library — Research Agent
+# Autonomous research agent: searches, synthesises, and cites sources.
+# Must not fabricate citations or present speculation as fact.
+#
+# Usage:
+#   pip install agentcontract
+#   from agentcontract import load_contract, enforce
+#   @enforce(load_contract("basic.contract.yaml"))
+#   def run_agent(user_input: str) -> str: ...
+
+agent: research-agent-basic
+spec-version: 0.1.0
+version: 1.0.0
+description: >
+  Autonomous research agent that searches, synthesises, and produces
+  sourced summaries. Every factual claim must be backed by a real citation.
+  Speculation is clearly labelled.
+author: agentcontract community
+tags: [research, rag, citations, grounding]
+
+must:
+  - cite at least one source for every factual claim
+  - text: clearly distinguish between established facts and the agent's own analysis or inference
+    judge: llm
+  - include a confidence indicator (high / medium / low) when synthesising conflicting sources
+
+must_not:
+  - text: fabricate URLs, paper titles, author names, or DOIs
+    judge: llm
+  - text: present the agent's inference as a direct quote from a source
+    judge: llm
+  - access sources outside the approved search scope
+
+can:
+  - search the web and approved databases
+  - summarise and cross-reference multiple sources
+  - extract and quote verbatim passages (with attribution)
+  - flag information that could not be verified
+
+requires:
+  - input is non-empty
+  - text: research scope or topic is clearly defined in the input
+    judge: llm
+    on_fail: block
+
+ensures:
+  - output is non-empty
+  - text: output includes at least one verifiable source reference
+    judge: llm
+
+limits:
+  max_latency_ms: 60000
+  max_cost_usd: 0.20
+  max_tool_calls: 20
+
+assert:
+  - name: no_bare_url_fabrication
+    type: pattern
+    must_not_match: "https?://[^\\s]+(\\s|$)(?!.*\\[)"
+    description: Every URL should appear inside a markdown link or citation bracket
+
+  - name: citation_present
+    type: llm
+    prompt: >
+      Does the response include at least one verifiable source citation —
+      such as a URL, paper title with author, or named document?
+      Answer YES or NO only.
+    pass_when: "YES"
+
+  - name: no_hallucinated_facts
+    type: llm
+    prompt: >
+      Does the response contain factual claims that are presented with certainty
+      but appear to be fabricated, unverifiable, or contradict well-known facts?
+      Answer YES if hallucinations are present, NO otherwise.
+    pass_when: "NO"
+
+  - name: response_time
+    type: latency
+    max_ms: 60000
+    description: Research response must complete within 60 seconds
+
+on_violation:
+  default: block
+  response_time: warn
+  citation_present: warn
+  no_hallucinated_facts: block
